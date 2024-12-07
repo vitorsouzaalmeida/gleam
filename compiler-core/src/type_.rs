@@ -422,6 +422,14 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn field_map(&self) -> Option<&FieldMap> {
+        match self {
+            Type::Named { module, .. } if is_prelude_module(module) => None,
+            Type::Named { .. } => None,
+            _ => None,
+        }
+    }
 }
 
 pub fn collapse_links(t: Arc<Type>) -> Arc<Type> {
@@ -449,6 +457,14 @@ impl AccessorsMap {
         inferred_variant
             .and_then(|index| self.variant_specific_accessors.get(index as usize))
             .unwrap_or(&self.shared_accessors)
+    }
+}
+
+impl TypeConstructor {
+    pub fn field_map(&self) -> Option<&FieldMap> {
+        match self {
+            TypeConstructor { type_, .. } => type_.field_map(),
+        }
     }
 }
 

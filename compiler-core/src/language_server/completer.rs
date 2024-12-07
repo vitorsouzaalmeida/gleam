@@ -19,7 +19,8 @@ use crate::{
     line_numbers::LineNumbers,
     type_::{
         self, collapse_links, pretty::Printer, FieldMap, ModuleInterface, PreludeType,
-        RecordAccessor, Type, TypeConstructor, ValueConstructorVariant, PRELUDE_MODULE_NAME,
+        RecordAccessor, Type, TypeConstructor, ValueConstructor, ValueConstructorVariant,
+        PRELUDE_MODULE_NAME,
     },
     Result,
 };
@@ -383,10 +384,8 @@ where
 
     /// Provides completions for when the context being editted is a type.
     pub fn completion_types(&'a self) -> Vec<CompletionItem> {
-        let surrounding_completion = self.get_phrase_surrounding_completion();
+        let (insert_range, module_select) = self.get_phrase_surrounding_completion();
         let mut completions = vec![];
-
-        let (insert_range, module_select) = surrounding_completion;
 
         // Prelude types
         for type_ in PreludeType::iter() {
@@ -530,44 +529,20 @@ where
 
     /// Provides completions for when the context being editted is a value.
     pub fn completion_values(&'a self) -> Vec<CompletionItem> {
-        let surrounding_completion = self.get_phrase_surrounding_completion();
+        let (insert_range, module_select) = self.get_phrase_surrounding_completion();
         let mut completions = vec![];
-        let mod_name = self.module.name.as_str();
 
-        let (insert_range, module_select) = surrounding_completion;
-
-        let mut push_prelude_completion = |label: &str, kind| {
-            let label = label.to_string();
-            let sort_text = Some(sort_text(CompletionKind::Prelude, &label));
-            completions.push(CompletionItem {
-                label,
-                detail: Some(PRELUDE_MODULE_NAME.into()),
-                kind: Some(kind),
-                sort_text,
-                ..Default::default()
-            });
-        };
-
-        // Prelude values
-        for type_ in PreludeType::iter() {
-            match type_ {
-                PreludeType::Bool => {
-                    push_prelude_completion("True", CompletionItemKind::ENUM_MEMBER);
-                    push_prelude_completion("False", CompletionItemKind::ENUM_MEMBER);
+        // Add constructor field completions
+        if let Some(constructor) = self.get_constructor_at_position() {
+            if let Some(field_map) = constructor.field_map() {
+                for (field_name, _) in &field_map.fields {
+                    completions.push(record_field_completion(
+                        field_name,
+                        constructor.type_.clone(),
+                        insert_range,
+                    ));
                 }
-                PreludeType::Nil => {
-                    push_prelude_completion("Nil", CompletionItemKind::ENUM_MEMBER);
-                }
-                PreludeType::Result => {
-                    push_prelude_completion("Ok", CompletionItemKind::CONSTRUCTOR);
-                    push_prelude_completion("Error", CompletionItemKind::CONSTRUCTOR);
-                }
-                PreludeType::BitArray
-                | PreludeType::Float
-                | PreludeType::Int
-                | PreludeType::List
-                | PreludeType::String
-                | PreludeType::UtfCodepoint => {}
+                return completions;
             }
         }
 
@@ -586,7 +561,8 @@ where
                 _ => None,
             }) {
                 completions.extend(
-                    LocalCompletion::new(mod_name, insert_range, cursor).fn_completions(fun),
+                    LocalCompletion::new(&self.module.name, insert_range, cursor)
+                        .fn_completions(fun),
                 );
             }
 
@@ -596,7 +572,7 @@ where
                 // even if those are internal.
                 completions.push(value_completion(
                     None,
-                    mod_name,
+                    &self.module.name,
                     name,
                     value,
                     insert_range,
@@ -629,7 +605,7 @@ where
                     }
                     completions.push(value_completion(
                         Some(&module),
-                        mod_name,
+                        &self.module.name,
                         name,
                         value,
                         insert_range,
@@ -648,7 +624,7 @@ where
                             let name = unqualified.used_name();
                             completions.push(value_completion(
                                 None,
-                                mod_name,
+                                &self.module.name,
                                 name,
                                 value,
                                 insert_range,
@@ -831,6 +807,27 @@ where
             Publicity::Public => true,
         }
     }
+
+    fn get_constructor_at_position(&self) -> Option<&ValueConstructor> {
+        // Get the current line
+        let position = self.cursor_position;
+        let line_start = self.src_line_numbers.byte_index(position.line, 0) as usize;
+        let line_end = self.src_line_numbers.byte_index(position.line + 1, 0) as usize;
+        let line = &self.src[line_start..line_end];
+
+        // Look for pattern like "Wibble("
+        let before_cursor = &line[..position.character as usize];
+        let constructor_name = before_cursor
+            .trim_end()
+            .trim_end_matches('(')
+            .split_whitespace()
+            .last()?;
+
+        // Look up the constructor in module's values
+        let constructor = self.module.ast.type_info.values.get(constructor_name);
+
+        constructor
+    }
 }
 
 fn add_import_to_completion(
@@ -970,6 +967,27 @@ fn field_completion(label: &str, type_: Arc<Type>) -> CompletionItem {
         kind: Some(CompletionItemKind::FIELD),
         detail: Some(type_),
         sort_text: Some(sort_text(CompletionKind::FieldAccessor, label)),
+        ..Default::default()
+    }
+}
+
+fn record_field_completion(
+    field_name: &str,
+    field_type: Arc<Type>,
+    insert_range: Range,
+) -> CompletionItem {
+    let label = format!("{field_name}: ");
+    let type_str = Printer::new().pretty_print(&field_type, 0);
+
+    CompletionItem {
+        label: label.clone(),
+        kind: Some(CompletionItemKind::FIELD),
+        detail: Some(type_str),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: insert_range,
+            new_text: label.clone(),
+        })),
+        sort_text: Some(sort_text(CompletionKind::FieldAccessor, &label)),
         ..Default::default()
     }
 }

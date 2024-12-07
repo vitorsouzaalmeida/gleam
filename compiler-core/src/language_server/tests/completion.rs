@@ -1856,3 +1856,17 @@ pub fn map(_, _) { [] }
         Position::new(3, 8)
     );
 }
+
+#[test]
+fn constructor_field_completions() {
+    let code = r#"
+pub type Wibble {
+  Wibble(arg1: Int, arg2: Float)
+}
+
+pub fn main() {
+  let wibble = Wibble()
+}
+"#;
+    assert_completion!(TestProject::for_source(code), Position::new(6, 22));
+}
